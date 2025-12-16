@@ -1,0 +1,754 @@
+last_try!!!
+================
+Fenglin Xie
+2025-12-16
+
+# 第一步：加载必要的包和设置参数
+
+``` r
+# 1. 加载必要的包
+library(tidyverse)    # 数据处理和绘图
+```
+
+    ## ── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+    ## ✔ dplyr     1.1.4     ✔ readr     2.1.5
+    ## ✔ forcats   1.0.1     ✔ stringr   1.5.2
+    ## ✔ ggplot2   4.0.0     ✔ tibble    3.3.0
+    ## ✔ lubridate 1.9.4     ✔ tidyr     1.3.1
+    ## ✔ purrr     1.1.0     
+    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+    ## ✖ dplyr::filter() masks stats::filter()
+    ## ✖ dplyr::lag()    masks stats::lag()
+    ## ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+
+``` r
+library(fda)          # 函数型数据分析
+```
+
+    ## Loading required package: splines
+    ## Loading required package: fds
+    ## Loading required package: rainbow
+    ## Loading required package: MASS
+    ## 
+    ## Attaching package: 'MASS'
+    ## 
+    ## The following object is masked from 'package:dplyr':
+    ## 
+    ##     select
+    ## 
+    ## Loading required package: pcaPP
+    ## Loading required package: RCurl
+    ## 
+    ## Attaching package: 'RCurl'
+    ## 
+    ## The following object is masked from 'package:tidyr':
+    ## 
+    ##     complete
+    ## 
+    ## Loading required package: deSolve
+    ## 
+    ## Attaching package: 'fda'
+    ## 
+    ## The following object is masked from 'package:graphics':
+    ## 
+    ##     matplot
+    ## 
+    ## The following object is masked from 'package:datasets':
+    ## 
+    ##     gait
+
+``` r
+library(patchwork)    # 组合多个图表
+```
+
+    ## 
+    ## Attaching package: 'patchwork'
+    ## 
+    ## The following object is masked from 'package:MASS':
+    ## 
+    ##     area
+
+``` r
+# 设置随机种子，确保结果可重复
+set.seed(123)
+
+# 2. 定义基本参数
+n <- 100               # 个体数量
+sigma <- 0.2          # 误差项的标准差
+m_values <- c(50, 100, 500, 1000, 5000, 10000)  # 不同样本量
+```
+
+# 第二步：定义真实的系数函数 β(q)
+
+``` r
+# 3. 定义真实的系数函数 β(q)
+# 我们设计一个简单但非平凡的系数函数
+
+true_beta <- function(q) {
+  # 确保函数能处理向量输入
+  if(length(q) > 1) {
+    return(sapply(q, true_beta))
+  }
+  1.5 * exp(-20 * (q - 0.3)^2) + 2.0 * exp(-15 * (q - 0.7)^2)
+}
+
+
+# 可视化真实的β函数
+q_grid <- seq(0, 1, length.out = 100)
+beta_values <- true_beta(q_grid)
+
+plot_beta_true <- ggplot(data.frame(q = q_grid, beta = beta_values), 
+                         aes(x = q, y = beta)) +
+  geom_line(color = "darkblue", size = 1.5) +
+  labs(title = "True Coefficient Function β(q)",
+       x = "Quantile q", y = "β(q)") +
+  theme_minimal()
+```
+
+    ## Warning: Using `size` aesthetic for lines was deprecated in ggplot2 3.4.0.
+    ## ℹ Please use `linewidth` instead.
+    ## This warning is displayed once every 8 hours.
+    ## Call `lifecycle::last_lifecycle_warnings()` to see where this warning was
+    ## generated.
+
+``` r
+print(plot_beta_true)
+```
+
+![](last_try_副本_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
+
+# 第三步：生成真实的个体密度函数 f_i(t)
+
+``` r
+# 4. 生成n个真实的密度函数 f_i(t)
+
+# 修复闭包问题：使用工厂函数创建闭包
+create_density_functions <- function(a, b) {
+  list(
+    density_func = function(t) dbeta(t, a, b),
+    cdf_func = function(t) pbeta(t, a, b),
+    quantile_func = function(q) qbeta(pmax(pmin(q, 0.999), 0.001), a, b)  # 避免边界问题
+  )
+}
+
+# 所有密度函数都来自Beta分布族，但参数略有不同
+
+# 设置Beta分布的中心参数
+alpha0 <- 2    # 形状参数1的中心值
+beta0 <- 5     # 形状参数2的中心值
+
+# 生成每个个体的参数（围绕中心值有微小波动）
+set.seed(456)  # 为参数生成设置单独的随机种子
+alphas <- alpha0 + runif(n, -0.5, 0.5)  # 均匀扰动
+betas <- beta0 + runif(n, -0.5, 0.5)    # 均匀扰动
+
+# 确保参数为正数
+alphas <- pmax(alphas, 1.5)
+betas <- pmax(betas, 1.5)
+
+# 创建真实密度函数的列表（修复闭包问题）
+true_functions <- lapply(1:n, function(i) {
+  create_density_functions(alphas[i], betas[i])
+})
+
+# 提取各个函数列表
+true_densities <- lapply(true_functions, function(x) x$density_func)
+true_cdfs <- lapply(true_functions, function(x) x$cdf_func)
+true_quantiles <- lapply(true_functions, function(x) x$quantile_func)
+
+# 可视化几个个体的真实密度函数
+t_grid <- seq(0.01, 0.99, length.out = 200)
+plot_data <- data.frame()
+
+set.seed(789)
+selected_individuals <- sample(1:n, 5)
+
+for(i in selected_individuals) {
+  density_values <- sapply(t_grid, true_densities[[i]])
+  plot_data <- rbind(plot_data,
+                     data.frame(t = t_grid,
+                                density = density_values,
+                                individual = paste("Individual", i)))
+}
+
+plot_densities <- ggplot(plot_data, aes(x = t, y = density, color = individual)) +
+  geom_line(linewidth = 1) +
+  labs(title = "True Density Functions for 5 Randomly Selected Individuals",
+       x = "t", y = "f_i(t)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(plot_densities)
+```
+
+![](last_try_副本_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+
+# 第四步：定义对数分位数密度变换
+
+``` r
+# 5. 定义对数分位数密度变换函数
+# 变换公式：T(f_i) = log(f_i ∘ F_i^{-1})
+log_density_quantile_transform <- function(density_func, quantile_func) {
+  # 向量化变换函数
+  function(q) {
+    q_safe <- pmin(pmax(q, 0.01), 0.99)
+    t_q <- quantile_func(q_safe)
+    f_val <- density_func(t_q)
+    log(pmax(f_val, 1e-10))
+  }
+}
+
+# 测试变换函数
+test_q <- seq(0.1, 0.9, by = 0.1)
+test_transform <- log_density_quantile_transform(true_densities[[1]], true_quantiles[[1]])
+transformed_values <- test_transform(test_q)  # 向量化调用
+
+cat("测试变换函数 - 前几个值:\n")
+```
+
+    ## 测试变换函数 - 前几个值:
+
+``` r
+print(head(transformed_values))
+```
+
+    ## [1] 0.8135353 0.9381294 0.9573963 0.9244128 0.8508191 0.7346692
+
+# 第五步：生成真实的响应变量 Y
+
+``` r
+# 6. 根据真实模型生成响应变量 Y
+# 模型：Y_i = ∫ β(q) * log(f_i(F_i^{-1}(q))) dq + ε_i
+
+# 创建分位数网格用于数值积分
+q_grid_integral <- seq(0.05, 0.95, length.out = 50)
+
+# 计算每个个体的变换后密度函数
+transformed_densities_true <- lapply(1:n, function(i) {
+  log_density_quantile_transform(true_densities[[i]], true_quantiles[[i]])
+})
+
+# 修正的数值积分函数（梯形法则）
+trapezoidal_integral <- function(f, g, grid = q_grid_integral) {
+  # 确保f和g能处理向量输入
+  f_vals <- f(grid)
+  g_vals <- g(grid)
+  h <- grid[2] - grid[1]
+  # 梯形法则公式
+  sum_h <- f_vals[1] * g_vals[1] + f_vals[length(grid)] * g_vals[length(grid)] +
+    2 * sum(f_vals[-c(1, length(grid))] * g_vals[-c(1, length(grid))])
+  (h/2) * sum_h
+}
+
+# 计算每个个体的Y值
+set.seed(999)
+Y_true <- numeric(n)
+
+for(i in 1:n) {
+  # 计算内积：∫ β(q) * log(f_i(F_i^{-1}(q))) dq
+  integrand <- function(q) {
+    true_beta(q) * transformed_densities_true[[i]](q)
+  }
+  
+  # 直接计算积分值
+  f_vals <- true_beta(q_grid_integral)
+  g_vals <- transformed_densities_true[[i]](q_grid_integral)
+  h <- q_grid_integral[2] - q_grid_integral[1]
+  integral <- (h/2) * (f_vals[1]*g_vals[1] + 
+                       f_vals[length(q_grid_integral)]*g_vals[length(q_grid_integral)] +
+                       2 * sum(f_vals[-c(1, length(q_grid_integral))] * 
+                               g_vals[-c(1, length(q_grid_integral))]))
+  
+  Y_true[i] <- integral + rnorm(1, 0, sigma)
+}
+
+# 检查Y的分布
+summary_data <- data.frame(Y = Y_true)
+plot_Y_dist <- ggplot(summary_data, aes(x = Y)) +
+  geom_histogram(bins = 20, fill = "lightblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of True Response Variable Y",
+       x = "Y", y = "Frequency") +
+  theme_minimal()
+
+print(plot_Y_dist)
+```
+
+![](last_try_副本_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+
+# 第六步：从真实密度中抽取观测值并估计密度
+
+``` r
+# 7. 定义核密度估计函数
+
+estimate_density_kde_improved <- function(observations, n_grid = 200) {
+  # 清理观测值
+  obs_clean <- observations[observations >= 0 & observations <= 1]
+  if(length(obs_clean) < 10) {
+    obs_clean <- observations
+  }
+  
+  # 使用更稳定的带宽选择方法
+  bw <- bw.SJ(obs_clean)
+  bw <- max(min(bw, 0.2), 0.05)  # 限制带宽范围
+  
+  # 核密度估计
+  kde <- density(obs_clean, bw = bw, from = 0, to = 1, n = n_grid)
+  
+  # 确保密度为正
+  kde$y <- pmax(kde$y, 1e-10)
+  
+  # 创建密度函数
+  density_func <- approxfun(kde$x, kde$y, rule = 2)
+  
+  # 创建CDF函数（通过积分）
+  x_vals <- seq(0, 1, length.out = n_grid)
+  pdf_vals <- density_func(x_vals)
+  
+  # 使用累积和计算CDF
+  cdf_vals <- cumsum(pdf_vals) * (x_vals[2] - x_vals[1])
+  cdf_vals <- cdf_vals / max(cdf_vals)  # 标准化
+  
+  cdf_func <- approxfun(x_vals, cdf_vals, rule = 2, yleft = 0, yright = 1)
+  
+  # 创建分位数函数（CDF的逆函数）
+  quantile_func <- function(q) {
+    q_safe <- pmin(pmax(q, 0.001), 0.999)
+    # 使用数值方法找到CDF等于q的t值
+    sapply(q_safe, function(qq) {
+      root_func <- function(t) cdf_func(t) - qq
+      tryCatch({
+        uniroot(root_func, c(0, 1))$root
+      }, error = function(e) {
+        approx(cdf_vals, x_vals, xout = qq)$y
+      })
+    })
+  }
+  
+  return(list(
+    density_func = density_func,
+    cdf_func = cdf_func,
+    quantile_func = quantile_func,
+    bandwidth = bw
+  ))
+}
+
+# 测试改进的密度估计
+test_m <- 100
+test_observations <- rbeta(test_m, alphas[1], betas[1])
+test_est <- estimate_density_kde_improved(test_observations)
+
+# 可视化比较
+t_plot <- seq(0.05, 0.95, length.out = 200)
+true_dens_vals <- sapply(t_plot, true_densities[[1]])
+est_dens_vals <- sapply(t_plot, test_est$density_func)
+
+comparison_data <- data.frame(
+  t = rep(t_plot, 2),
+  density = c(true_dens_vals, est_dens_vals),
+  type = rep(c("True Density", "Estimated Density"), each = length(t_plot))
+)
+
+plot_density_comparison <- ggplot(comparison_data, aes(x = t, y = density, color = type, linetype = type)) +
+  geom_line(linewidth = 1) +
+  labs(title = paste("True vs Estimated Density (m =", test_m, ")"),
+       x = "t", y = "Density f(t)") +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.title = element_blank())
+
+print(plot_density_comparison)
+```
+
+![](last_try_副本_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+
+# 第七步：使用refund包的正确回归函数
+
+``` r
+perform_functional_regression_refund <- function(X_matrix, Y_values, q_grid) {
+  # X_matrix: n x p 矩阵，每行是一个个体的函数型观测
+  # Y_values: 响应变量向量
+  # q_grid: 评估点网格
+  
+  n_obs <- length(Y_values)
+  n_points <- length(q_grid)
+  
+  # 创建数据框
+  data_df <- data.frame(Y = Y_values)
+  
+  # 添加函数型协变量 - refund包要求的格式
+  data_df$X <- I(X_matrix)
+  
+  # 使用pfr函数进行函数型回归
+  model_formula <- Y ~ lf(X, argvals = q_grid)
+  
+  # 拟合模型
+  model_fit <- pfr(model_formula, data = data_df)
+  
+  # 提取系数函数 - 修复方法
+  # 方法1: 尝试从模型中直接提取系数网格点
+  tryCatch({
+    # 获取系数摘要
+    coef_summary <- summary(model_fit)
+    
+    # 检查是否有可用的系数信息
+    if(!is.null(coef_summary$functions) && length(coef_summary$functions) > 0) {
+      # 提取第一个函数型项的系数
+      beta_values <- coef_summary$functions[[1]]$value
+      beta_q <- coef_summary$functions[[1]]$q
+    } else {
+      # 备选方法：使用predict获取系数
+      beta_values <- predict(model_fit, type = "terms")[, 1]
+      beta_q <- q_grid
+      
+      # 如果长度不匹配，截断或填充
+      if(length(beta_values) > length(q_grid)) {
+        beta_values <- beta_values[1:length(q_grid)]
+      } else if(length(beta_values) < length(q_grid)) {
+        # 插值到原始网格
+        beta_values <- approx(seq(0, 1, length.out = length(beta_values)), 
+                             beta_values, xout = q_grid)$y
+      }
+    }
+  }, error = function(e) {
+    cat("系数提取失败:", e$message, "\n")
+    # 使用简单备选方案：零函数
+    beta_values <- rep(0, length(q_grid))
+    beta_q <- q_grid
+  })
+  
+  # 确保我们有相同长度的q和value
+  if(length(beta_q) != length(beta_values)) {
+    cat("警告: q和value长度不匹配(", length(beta_q), "vs", length(beta_values), ")，进行校正...\n")
+    
+    if(length(beta_q) > length(beta_values)) {
+      beta_q <- beta_q[1:length(beta_values)]
+    } else if(length(beta_q) < length(beta_values)) {
+      beta_values <- beta_values[1:length(beta_q)]
+    }
+  }
+  
+  # 创建系数函数（通过插值）
+  beta_est <- function(q) {
+    q_safe <- pmin(pmax(q, min(beta_q, na.rm = TRUE)), max(beta_q, na.rm = TRUE))
+    result <- tryCatch({
+      approx(beta_q, beta_values, xout = q_safe, rule = 2)$y
+    }, error = function(e) {
+      # 如果插值失败，返回0
+      rep(0, length(q_safe))
+    })
+    
+    # 处理可能的NA值
+    ifelse(is.na(result), 0, result)
+  }
+  
+  return(list(
+    beta_func = beta_est,
+    model_fit = model_fit,
+    beta_values = beta_values,
+    beta_q = beta_q
+  ))
+}
+```
+
+# 第八步：完整的模拟流程
+
+``` r
+# 存储结果
+beta_estimates <- list()
+mse_results <- data.frame()
+
+# 对每个m值进行模拟
+for(m_idx in seq_along(m_values)) {
+  m <- m_values[m_idx]
+  cat("\n========== 开始模拟: m =", m, "==========\n")
+  
+  # 步骤1: 从每个真实密度中生成m个观测值
+  cat("步骤1: 生成观测值...\n")
+  observations_list <- list()
+  for(i in 1:n) {
+    observations_list[[i]] <- rbeta(m, alphas[i], betas[i])
+  }
+  
+  # 步骤2: 估计密度函数
+  cat("步骤2: 估计密度函数...\n")
+  estimated_functions <- list()
+  for(i in 1:n) {
+    estimated_functions[[i]] <- estimate_density_kde_improved(observations_list[[i]])
+  }
+  
+  # 步骤3: 计算变换
+  cat("步骤3: 计算对数分位数密度变换...\n")
+  transformed_densities_est <- list()
+  for(i in 1:n) {
+    transformed_densities_est[[i]] <- log_density_quantile_transform(
+      estimated_functions[[i]]$density_func,
+      estimated_functions[[i]]$quantile_func
+    )
+  }
+  
+  # 步骤4: 创建函数型协变量矩阵
+  cat("步骤4: 创建函数型协变量矩阵...\n")
+  X_matrix <- matrix(0, nrow = n, ncol = length(q_grid_integral))
+  
+  for(i in 1:n) {
+    X_matrix[i, ] <- transformed_densities_est[[i]](q_grid_integral)
+  }
+  
+  # 检查矩阵是否有足够变异性
+  col_vars <- apply(X_matrix, 2, var, na.rm = TRUE)
+  if(any(col_vars < 1e-10, na.rm = TRUE)) {
+    cat("警告：部分列方差过小，添加微小噪声...\n")
+    # 添加微小噪声避免奇异性
+    X_matrix <- X_matrix + matrix(rnorm(n * length(q_grid_integral), 0, 1e-6), 
+                                  nrow = n, ncol = length(q_grid_integral))
+  }
+  
+  # 步骤5: 进行函数型回归
+  cat("步骤5: 进行函数型回归...\n")
+  reg_result <- tryCatch({
+    perform_functional_regression_refund(X_matrix, Y_true, q_grid_integral)
+  }, error = function(e) {
+    cat("回归失败:", e$message, "\n")
+    return(NULL)
+  })
+  
+  if(is.null(reg_result)) {
+    cat("跳过 m =", m, "\n")
+    
+    # 仍然记录结果，但用NA表示失败
+    beta_estimates[[as.character(m)]] <- NULL
+    mse_results <- rbind(mse_results, data.frame(m = m, mse = NA))
+    next
+  }
+  
+  # 存储估计的beta函数
+  beta_estimates[[as.character(m)]] <- reg_result$beta_func
+  
+  # 步骤6: 计算估计误差（添加额外错误处理）
+  cat("步骤6: 计算估计误差...\n")
+  
+  eval_q <- seq(0.1, 0.9, length.out = 100)
+  
+  # 计算真实系数值
+  true_beta_vals <- tryCatch({
+    true_beta(eval_q)
+  }, error = function(e) {
+    cat("计算真实beta值失败:", e$message, "\n")
+    rep(0, length(eval_q))
+  })
+  
+  # 计算估计系数值
+  est_beta_vals <- tryCatch({
+    sapply(eval_q, reg_result$beta_func)
+  }, error = function(e) {
+    cat("计算估计beta值失败:", e$message, "\n")
+    rep(0, length(eval_q))
+  })
+  
+  # 确保长度相同
+  if(length(true_beta_vals) != length(est_beta_vals)) {
+    cat("警告: 真实值和估计值长度不同，进行截断...\n")
+    min_len <- min(length(true_beta_vals), length(est_beta_vals))
+    true_beta_vals <- true_beta_vals[1:min_len]
+    est_beta_vals <- est_beta_vals[1:min_len]
+  }
+  
+  # 移除NA值
+  valid_idx <- !is.na(true_beta_vals) & !is.na(est_beta_vals)
+  if(sum(valid_idx) > 0) {
+    mse_val <- mean((true_beta_vals[valid_idx] - est_beta_vals[valid_idx])^2)
+  } else {
+    mse_val <- NA
+    cat("警告: 没有有效的值对计算MSE\n")
+  }
+  
+  mse_results <- rbind(mse_results, data.frame(m = m, mse = mse_val))
+  
+  cat("MSE =", ifelse(is.na(mse_val), "NA", round(mse_val, 6)), "\n")
+  if(!all(is.na(est_beta_vals))) {
+    cat("估计系数范围:", round(range(est_beta_vals, na.rm = TRUE), 4), "\n")
+  }
+}
+```
+
+    ## 
+    ## ========== 开始模拟: m = 50 ==========
+    ## 步骤1: 生成观测值...
+    ## 步骤2: 估计密度函数...
+    ## 步骤3: 计算对数分位数密度变换...
+    ## 步骤4: 创建函数型协变量矩阵...
+    ## 步骤5: 进行函数型回归...
+    ## 回归失败: could not find function "pfr" 
+    ## 跳过 m = 50 
+    ## 
+    ## ========== 开始模拟: m = 100 ==========
+    ## 步骤1: 生成观测值...
+    ## 步骤2: 估计密度函数...
+    ## 步骤3: 计算对数分位数密度变换...
+    ## 步骤4: 创建函数型协变量矩阵...
+    ## 步骤5: 进行函数型回归...
+    ## 回归失败: could not find function "pfr" 
+    ## 跳过 m = 100 
+    ## 
+    ## ========== 开始模拟: m = 500 ==========
+    ## 步骤1: 生成观测值...
+    ## 步骤2: 估计密度函数...
+    ## 步骤3: 计算对数分位数密度变换...
+    ## 步骤4: 创建函数型协变量矩阵...
+    ## 步骤5: 进行函数型回归...
+    ## 回归失败: could not find function "pfr" 
+    ## 跳过 m = 500 
+    ## 
+    ## ========== 开始模拟: m = 1000 ==========
+    ## 步骤1: 生成观测值...
+    ## 步骤2: 估计密度函数...
+    ## 步骤3: 计算对数分位数密度变换...
+    ## 步骤4: 创建函数型协变量矩阵...
+    ## 步骤5: 进行函数型回归...
+    ## 回归失败: could not find function "pfr" 
+    ## 跳过 m = 1000 
+    ## 
+    ## ========== 开始模拟: m = 5000 ==========
+    ## 步骤1: 生成观测值...
+    ## 步骤2: 估计密度函数...
+    ## 步骤3: 计算对数分位数密度变换...
+    ## 步骤4: 创建函数型协变量矩阵...
+    ## 步骤5: 进行函数型回归...
+    ## 回归失败: could not find function "pfr" 
+    ## 跳过 m = 5000 
+    ## 
+    ## ========== 开始模拟: m = 10000 ==========
+    ## 步骤1: 生成观测值...
+    ## 步骤2: 估计密度函数...
+    ## 步骤3: 计算对数分位数密度变换...
+    ## 步骤4: 创建函数型协变量矩阵...
+    ## 步骤5: 进行函数型回归...
+    ## 回归失败: could not find function "pfr" 
+    ## 跳过 m = 10000
+
+# 第九步修复：增强可视化错误处理
+
+``` r
+cat("\n========== 结果汇总 ==========\n")
+```
+
+    ## 
+    ## ========== 结果汇总 ==========
+
+``` r
+if(nrow(mse_results) > 0 && any(!is.na(mse_results$mse))) {
+  valid_results <- mse_results[!is.na(mse_results$mse), ]
+  
+  if(nrow(valid_results) > 0) {
+    print(valid_results)
+    
+    # 1. 绘制MSE随m变化的图
+    plot_mse <- ggplot(valid_results, aes(x = m, y = mse)) +
+      geom_line(linewidth = 1.5, color = "darkred") +
+      geom_point(size = 3, color = "darkred") +
+      scale_x_log10(
+        breaks = valid_results$m,
+        labels = as.character(valid_results$m)
+      ) +
+      labs(title = "Coefficient Function Estimation Error vs Sample Size",
+           subtitle = "Estimation error decreases as sample size increases",
+           x = "Sample Size per Individual (m)",
+           y = "Mean Squared Error (MSE)") +
+      theme_minimal()
+    
+    # 只在有多个点且值都为正数时使用对数y轴
+    if(nrow(valid_results) > 1 && all(valid_results$mse > 0, na.rm = TRUE)) {
+      plot_mse <- plot_mse + scale_y_log10()
+    }
+    
+    print(plot_mse)
+    
+    # 2. 绘制系数函数比较图
+    if(length(beta_estimates) > 0) {
+      q_eval <- seq(0.1, 0.9, length.out = 50)  # 减少评估点数量以提高稳定性
+      plot_data <- data.frame()
+      
+      # 添加真实β函数
+      true_beta_vals <- tryCatch({
+        true_beta(q_eval)
+      }, error = function(e) {
+        rep(0, length(q_eval))
+      })
+      
+      plot_data <- rbind(plot_data,
+                         data.frame(q = q_eval,
+                                    beta = true_beta_vals,
+                                    type = "True β(q)",
+                                    m = NA))
+      
+      # 添加估计的β函数
+      for(m_val in names(beta_estimates)) {
+        if(!is.null(beta_estimates[[m_val]])) {
+          beta_func <- beta_estimates[[m_val]]
+          
+          est_vals <- tryCatch({
+            sapply(q_eval, beta_func)
+          }, error = function(e) {
+            cat("计算m =", m_val, "的估计值时出错:", e$message, "\n")
+            rep(NA, length(q_eval))
+          })
+          
+          # 只添加有效的结果
+          if(!all(is.na(est_vals))) {
+            plot_data <- rbind(plot_data,
+                               data.frame(q = q_eval,
+                                          beta = est_vals,
+                                          type = "Estimated",
+                                          m = as.numeric(m_val)))
+          }
+        }
+      }
+      
+      # 检查是否有数据可绘制
+      if(nrow(plot_data) > length(q_eval)) {
+        # 创建颜色映射
+        unique_ms <- unique(plot_data$m[!is.na(plot_data$m)])
+        color_vals <- c("True β(q)" = "black")
+        
+        # 分配颜色
+        colors <- c("#FF6B6B", "#FFA726", "#66BB6A", "#42A5F5", "#7E57C2", "#5D4037")
+        for(i in seq_along(unique_ms)) {
+          color_vals[as.character(unique_ms[i])] <- colors[(i-1) %% length(colors) + 1]
+        }
+        
+        plot_betas <- ggplot(plot_data, aes(x = q, y = beta, 
+                                            color = ifelse(is.na(m), "True β(q)", as.character(m)),
+                                            linetype = type)) +
+          geom_line(linewidth = 1) +
+          scale_color_manual(
+            name = "Sample Size",
+            values = color_vals,
+            breaks = names(color_vals),
+            labels = c("True β(q)", paste0("m = ", unique_ms))
+          ) +
+          scale_linetype_manual(
+            name = "Function Type",
+            values = c("True β(q)" = "solid", "Estimated" = "dashed"),
+            labels = c("Estimated", "True β(q)")
+          ) +
+          labs(title = "Comparison of True and Estimated Coefficient Functions",
+               subtitle = "Estimated β(q) converges to true β(q) as sample size increases",
+               x = "Quantile q",
+               y = "β(q)") +
+          theme_minimal() +
+          theme(legend.position = "bottom",
+                legend.box = "vertical")
+        
+        print(plot_betas)
+      } else {
+        cat("没有足够的有效数据绘制系数函数比较图\n")
+      }
+    }
+  } else {
+    cat("没有有效的MSE结果进行可视化\n")
+  }
+} else {
+  cat("没有可用的结果进行可视化\n")
+}
+```
+
+    ## 没有可用的结果进行可视化
