@@ -5,7 +5,6 @@ Fenglin Xie
 
 ``` r
 # Simulation Study: Impact of Sample Size on Density Estimation and Weight Function Recovery
-# FIXED VERSION - Resolves NaN issues and incorrect error trends
 
 library(ggplot2)
 library(dplyr)
@@ -40,18 +39,18 @@ library(matrixStats)
 # ==================== PARAMETER SETTINGS ====================
 
 # Population parameters
-alpha0 <- 2
-beta0 <- 5
-sigma_alpha <- 0.2
-sigma_beta <- 0.5
+alpha0 = 2
+beta0 = 5
+sigma_alpha = 0.2
+sigma_beta = 0.5
 
 # True weight function (simpler for better estimation)
-true_weight_function <- function(t) {
-  0.5 + sin(2 * pi * t)  # Simpler, well-behaved function
+true_weight_function = function(t) {
+  0.5 + sin(2 * pi * t) 
 }
 
 # Sample size sequence
-sample_sizes <- c(10, 20, 50, 100, 200, 500, 1000)
+sample_sizes <- c(100, 200, 500, 1000, 5000, 10000)
 
 # Simulation parameters
 n_replicates <- 200
@@ -334,12 +333,6 @@ for (sample_size in sample_sizes) {
 }
 ```
 
-    ## Processing sample size: 10 
-    ##   Successful weight estimations: 200/200 (100.0%)
-    ## Processing sample size: 20 
-    ##   Successful weight estimations: 200/200 (100.0%)
-    ## Processing sample size: 50 
-    ##   Successful weight estimations: 200/200 (100.0%)
     ## Processing sample size: 100 
     ##   Successful weight estimations: 200/200 (100.0%)
     ## Processing sample size: 200 
@@ -347,6 +340,10 @@ for (sample_size in sample_sizes) {
     ## Processing sample size: 500 
     ##   Successful weight estimations: 200/200 (100.0%)
     ## Processing sample size: 1000 
+    ##   Successful weight estimations: 200/200 (100.0%)
+    ## Processing sample size: 5000 
+    ##   Successful weight estimations: 200/200 (100.0%)
+    ## Processing sample size: 10000 
     ##   Successful weight estimations: 200/200 (100.0%)
 
 ``` r
@@ -389,13 +386,12 @@ print(success_rates)
 ```
 
     ##   sample_size success_rate n_total n_success
-    ## 1          10            1     200       200
-    ## 2          20            1     200       200
-    ## 3          50            1     200       200
-    ## 4         100            1     200       200
-    ## 5         200            1     200       200
-    ## 6         500            1     200       200
-    ## 7        1000            1     200       200
+    ## 1         100            1     200       200
+    ## 2         200            1     200       200
+    ## 3         500            1     200       200
+    ## 4        1000            1     200       200
+    ## 5        5000            1     200       200
+    ## 6       10000            1     200       200
 
 ``` r
 # Compute weight function estimates on grid (only successful ones)
@@ -582,16 +578,15 @@ summary_statistics <- error_metrics %>%
 print(summary_statistics)
 ```
 
-    ## # A tibble: 7 × 6
+    ## # A tibble: 6 × 6
     ##   sample_size n_success density_error_mean density_error_sd weight_error_mean
     ##         <dbl>     <int>              <dbl>            <dbl>             <dbl>
-    ## 1          10       200              3.19            0.345              0.867
-    ## 2          20       200              1.82            0.174              0.840
-    ## 3          50       200              1.02            0.0944             0.809
-    ## 4         100       200              0.694           0.0592             0.783
-    ## 5         200       200              0.480           0.0374             0.752
-    ## 6         500       200              0.298           0.0220             0.733
-    ## 7        1000       200              0.209           0.0152             0.726
+    ## 1         100       200             0.689           0.0500              0.779
+    ## 2         200       200             0.480           0.0345              0.750
+    ## 3         500       200             0.298           0.0223              0.740
+    ## 4        1000       200             0.212           0.0150              0.721
+    ## 5        5000       200             0.0938          0.00643             0.713
+    ## 6       10000       200             0.0662          0.00451             0.716
     ## # ℹ 1 more variable: weight_error_sd <dbl>
 
 ``` r
@@ -615,8 +610,8 @@ if (nrow(convergence_data) >= 3) {
 
     ## 
     ## === CONVERGENCE RATE ANALYSIS (SUCCESSFUL SAMPLES) ===
-    ## Density estimation error convergence rate: 0.580
-    ## Weight function error convergence rate: 0.040
+    ## Density estimation error convergence rate: 0.508
+    ## Weight function error convergence rate: 0.017
 
 ``` r
 # ==================== SAVE RESULTS ====================
